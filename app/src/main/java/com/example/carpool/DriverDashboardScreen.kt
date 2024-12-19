@@ -14,7 +14,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -29,16 +28,18 @@ import coil.decode.ImageDecoderDecoder
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
+import com.example.carpool.ui.theme.Ride
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.firebase.firestore.SetOptions
 import com.google.android.gms.maps.model.LatLng
+import com.google.firebase.firestore.Query
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
+import java.time.LocalDateTime
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -57,12 +58,13 @@ fun DriverDashboardScreen(
     var rating by remember { mutableStateOf(0.0f) }
     var earnings by remember { mutableStateOf(0.0f) }
     var drivesCompleted by remember { mutableStateOf(0) }
+    var totalRatings by remember { mutableStateOf(0.0) } // New state for totalRatings
     var vehicleManufacturer by remember { mutableStateOf("") }
     var vehicleModel by remember { mutableStateOf("") }
     var licensePlate by remember { mutableStateOf("") }
     var workTime by remember { mutableStateOf("9:00  - 17:00 ") }
     var showTimePicker by remember { mutableStateOf(false) }
-    val lastDrives = listOf("Drive 1", "Drive 2", "Drive 3") // Placeholder data
+    var lastDrives by remember { mutableStateOf<List<Ride>>(emptyList()) }
     var showLocationPicker by remember { mutableStateOf(false) }
     var selectedLocation by remember { mutableStateOf(LatLng(41.9973, 21.4280)) }
     var radius by remember { mutableStateOf(10.0) } // Default radius in km
@@ -85,15 +87,48 @@ fun DriverDashboardScreen(
             firestore.collection("users").document(it.uid).get()
                 .addOnSuccessListener { document ->
                     if (document != null) {
-                        rating = document.getDouble("rating")?.toFloat() ?: 0.0f
-                        earnings = document.getDouble("earnings")?.toFloat() ?: 0.0f
                         drivesCompleted = document.getDouble("drivesCompleted")?.toInt() ?: 0
+                        price = document.getDouble("price") ?: 10.0 // Fetch price
+                        totalRatings = document.getDouble("totalRatings") ?: 0.0 // Fetch totalRatings
+                        
+                        earnings = (drivesCompleted * price).toFloat() // Calculate earnings
+                        rating = if (drivesCompleted > 0) {
+                            (totalRatings/drivesCompleted).toFloat() // Calculate average rating
+                        } else {
+                            0.0f
+                        }
+
                         vehicleManufacturer = document.getString("vehicleManufacturer") ?: ""
                         vehicleModel = document.getString("vehicleModel") ?: ""
                         licensePlate = document.getString("licensePlate") ?: ""
                         workTime = document.getString("workTime") ?: "9:00  - 17:00 "
                         price = document.getDouble("price") ?: 10.0 // Fetch price
                     }
+                }
+            // Fetch completed drives
+            firestore.collection("rides")
+                .whereEqualTo("driverId", user.uid)
+                .orderBy("rideTime", Query.Direction.DESCENDING)
+                .limit(10) // Fetch last 10 completed drives
+                .get()
+                .addOnSuccessListener { documents ->
+                    if (documents.isEmpty) {
+                        lastDrives = emptyList()
+                        drivesCompleted = 0
+                        println("RIDESD")
+
+                        // Update Firestore if necessary
+                    } else {
+                        val rides = documents.toObjects(Ride::class.java)
+                        lastDrives = rides
+                        println("RIDES D: $rides")
+                        drivesCompleted = rides.size
+                        firestore.collection("users").document(user.uid)
+                            .update("drivesCompleted", drivesCompleted)
+                    }
+                }
+                .addOnFailureListener { e ->
+                    println("Error fetching completed drives: $e")
                 }
         }
     }
@@ -244,6 +279,7 @@ fun DriverDashboardScreen(
                                 text = "Earnings: $$earnings",
                                 fontSize = 18.sp
                             )
+                            
                         }
                         Image(
                             painter = rememberAsyncImagePainter(
@@ -266,6 +302,7 @@ fun DriverDashboardScreen(
                         .fillMaxWidth(0.9f)
                         .clip(RoundedCornerShape(16.dp))
                         .background(MaterialTheme.colorScheme.primaryContainer)
+                        .clickable { showTimePicker = true } // Make entire box clickable
                         .padding(16.dp)
                 ) {
                     Row(
@@ -286,17 +323,6 @@ fun DriverDashboardScreen(
                                 fontSize = 18.sp
                             )
                         }
-                        Box(
-                            modifier = Modifier.align(Alignment.CenterVertically)
-                        ) {
-                            IconButton(onClick = { showTimePicker = true }) {
-                                Icon(
-                                    imageVector = Icons.Default.Add,
-                                    contentDescription = "Set Work Time",
-                                    modifier = Modifier.size(40.dp)
-                                )
-                            }
-                        }
                         Image(
                             painter = rememberAsyncImagePainter(
                                 model = R.drawable.time,
@@ -316,6 +342,7 @@ fun DriverDashboardScreen(
                         .fillMaxWidth(0.9f)
                         .clip(RoundedCornerShape(16.dp))
                         .background(MaterialTheme.colorScheme.secondaryContainer)
+                        .clickable { showLocationPicker = true } // Make entire box clickable
                         .padding(16.dp)
                 ) {
                     Row(
@@ -340,17 +367,6 @@ fun DriverDashboardScreen(
                                 text = "Radius: ${radius} km",
                                 fontSize = 18.sp
                             )
-                        }
-                        Box(
-                            modifier = Modifier.align(Alignment.CenterVertically)
-                        ) {
-                            IconButton(onClick = { showLocationPicker = true }) {
-                                Icon(
-                                    imageVector = Icons.Default.Add,
-                                    contentDescription = "Set Map Radius",
-                                    modifier = Modifier.size(40.dp)
-                                )
-                            }
                         }
                         Image(
                             painter = rememberAsyncImagePainter(
@@ -424,21 +440,21 @@ fun DriverDashboardScreen(
                     ) {
                         Column {
                             Text(
-                                "Last Drives",
+                                "Last Rides",
                                 fontSize = 22.sp,
                                 fontWeight = FontWeight.W600
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             if (lastDrives.isNotEmpty()) {
-                                lastDrives.forEach { drive ->
+                                lastDrives.forEach { ride ->
                                     Text(
-                                        text = drive,
+                                        text = "${LocalDateTime.parse(ride.rideTime).hour}:${LocalDateTime.parse(ride.rideTime).minute}",
                                         fontSize = 18.sp
                                     )
                                 }
                             } else {
                                 Text(
-                                    "No recent drives.",
+                                    "No recent rides.",
                                     fontSize = 18.sp
                                 )
                             }
@@ -453,6 +469,7 @@ fun DriverDashboardScreen(
                                 .size(80.dp)
                                 .clip(RoundedCornerShape(8.dp))
                         )
+
                     }
                 }
                 }

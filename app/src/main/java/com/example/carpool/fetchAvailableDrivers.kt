@@ -91,7 +91,13 @@ fun selectDriverAndCreateRide(
     val sourceMap = mapOf("latitude" to source.latitude, "longitude" to source.longitude)
     val destinationMap = mapOf("latitude" to destination.latitude, "longitude" to destination.longitude)
     
-    createRide(sourceMap, destinationMap, driverId, passengerId) { success, rideId -> 
+    createRide(sourceMap, destinationMap, driverId, passengerId) { success, rideId ->
+        if (success && !rideId.isNullOrEmpty()) {
+            // Log the rideId for debugging purposes
+            println("Ride created successfully with rideId: $rideId")
+        } else {
+            println("Failed to create ride or received empty rideId")
+        }
         callback(success, rideId)
     }
 }

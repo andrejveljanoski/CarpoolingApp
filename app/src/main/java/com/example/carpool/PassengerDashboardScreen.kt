@@ -29,19 +29,17 @@ import coil.decode.ImageDecoderDecoder
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.QuerySnapshot
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
 import kotlinx.coroutines.launch
 import com.google.android.gms.maps.model.LatLng
-import com.example.carpool.fetchDrivers
 import androidx.compose.runtime.LaunchedEffect
 import com.example.carpool.ui.theme.Ride
 import com.google.firebase.firestore.Query
 import java.time.LocalDateTime
-import java.time.LocalTime
+import com.google.firebase.firestore.FieldValue
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -57,7 +55,7 @@ fun PassengerDashboardScreen(
     val firestore = FirebaseFirestore.getInstance()
     val user = auth.currentUser
     val context = LocalContext.current
-    var rating by remember { mutableStateOf(0.0f) }
+    var rating by remember { mutableFloatStateOf(0.0f) }
     var showRidePicker by remember { mutableStateOf(false) }
     var showAvailableDrivers by remember { mutableStateOf(false) }
     var availableDrivers by remember { mutableStateOf<List<Map<String, Any>>>(emptyList()) }
@@ -65,7 +63,9 @@ fun PassengerDashboardScreen(
     var travelTimeText by remember { mutableStateOf("") }
     var source by remember { mutableStateOf(LatLng(41.9981, 21.4254)) }
     var destination by remember { mutableStateOf(LatLng(41.9981, 21.4254)) }
-
+    var showRatingModal by remember { mutableStateOf(false) }
+    var selectedDriver by remember { mutableStateOf<Map<String, Any>?>(null) }
+    var rideId by remember { mutableStateOf<String?>(null) }
 
     val imgLoader = ImageLoader.Builder(context)
         .components {
@@ -131,11 +131,37 @@ fun PassengerDashboardScreen(
         AvailableDriversDialog(
             availableDrivers = availableDrivers,
             onDriverSelected = { driver ->
-                selectDriverAndCreateRide(driver, source, destination, user!!.uid) { _, _ ->
-                    showAvailableDrivers = false
+                selectedDriver = driver
+                // Use the helper function instead of the conflicting one
+                selectDriverAndCreateRide(driver, source, destination, user?.uid ?: "") { success, id ->
+                    if (success && !id.isNullOrEmpty()) {
+                        rideId = id
+                        showAvailableDrivers = false
+                        showRatingModal = true
+                    } else {
+                        // Handle failure (e.g., show an error message)
+                        // ...existing code...
+                    }
                 }
             },
             onDismissRequest = { showAvailableDrivers = false }
+        )
+    }
+
+    // Rating modal
+    if (showRatingModal && selectedDriver != null && !rideId.isNullOrEmpty()) {
+        RatingDialog(
+            onSubmit = { rating ->
+                firestore.collection("users").document(selectedDriver!!["id"] as String)
+                    .update("totalRatings", FieldValue.increment(rating.toDouble()))
+                // Optionally, update ride with rating
+                firestore.collection("rides").document(rideId!!)
+                    .update("passengerRating", rating)
+                showRatingModal = false
+                // Optionally, show a thank you message
+                // ...existing code...
+            },
+            onDismiss = { showRatingModal = false }
         )
     }
 
@@ -266,6 +292,8 @@ fun PassengerDashboardScreen(
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                         }
+
+
                         Image(
                             painter = rememberAsyncImagePainter(
                                 model = R.drawable.map,
@@ -276,8 +304,12 @@ fun PassengerDashboardScreen(
                                 .size(80.dp)
                                 .clip(RoundedCornerShape(8.dp))
                         )
+
                     }
                 }
+                Text(
+                    text = travelTimeText
+                )
 
                 Spacer(modifier = Modifier.height(16.dp))
 
@@ -325,9 +357,7 @@ fun PassengerDashboardScreen(
                                 .size(80.dp)
                                 .clip(RoundedCornerShape(8.dp))
                         )
-                        Text(
-                            text = travelTimeText
-                        )
+
                     }
                 }
             }
@@ -341,7 +371,7 @@ fun AvailableDriversDialog(
     onDriverSelected: (Map<String, Any>) -> Unit,
     onDismissRequest: () -> Unit
 ) {
-    var selectedDriverIndex by remember { mutableStateOf(-1) }
+    var selectedDriverIndex by remember { mutableIntStateOf(-1) }
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
@@ -349,6 +379,18 @@ fun AvailableDriversDialog(
         text = {
             LazyColumn {
                 itemsIndexed(availableDrivers) { index, driver ->
+                    // Debugging log to verify driver data
+                    LaunchedEffect(driver) {
+                        println("Driver $index: $driver")
+                    }
+
+                    val name = driver["name"] as? String ?: "Unknown"
+                    val rating = driver["rating"]?.toString() ?: "N/A"
+                    val price = driver["price"]?.toString() ?: "N/A"
+                    val vehicleManufacturer = driver["vehicleManufacturer"] ?: "Toyota"
+                    val vehicleModel = driver["vehicleModel"] ?: "Auris"
+
+
                     val isSelected = selectedDriverIndex == index
                     Row(
                         modifier = Modifier
@@ -364,11 +406,15 @@ fun AvailableDriversDialog(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "${driver["name"]}",
+                                text = name,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Rating: ${driver["rating"]}   Price: ${driver["price"]}",
+                                text = "Rating: $rating   Price: $$price"
+                            )
+                            // Added Vehicle Manufacturer and Model with safe access
+                            Text(
+                                text = "Vehicle: $vehicleManufacturer $vehicleModel",
                             )
                         }
                         RadioButton(
@@ -404,7 +450,6 @@ fun RidePickerDialog(
     onLocationSelected: (LatLng, LatLng, String, String) -> Unit,
     onDismissRequest: () -> Unit
 ) {
-    val context = LocalContext.current
     var sourceLat by remember { mutableStateOf("41.9981") } // Default to Skopje
     var sourceLng by remember { mutableStateOf("21.4254") } // Default to Skopje
     var destinationLat by remember { mutableStateOf("41.9981") } // Default to Skopje
@@ -532,4 +577,36 @@ fun ProfileDropdownMenu(
             }
         )
     }
+}
+
+@Composable
+fun RatingDialog(onSubmit: (Int) -> Unit, onDismiss: () -> Unit) {
+    var rating by remember { mutableIntStateOf(0) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rate Passenger") },
+        text = {
+            Column {
+                Text("Please rate your passenger from 0 to 5")
+                Slider(
+                    value = rating.toFloat(),
+                    onValueChange = { rating = it.toInt() },
+                    valueRange = 0f..5f,
+                    steps = 4
+                )
+                Text("Rating: $rating")
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSubmit(rating) }) {
+                Text("Submit")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
